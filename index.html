@@ -710,6 +710,13 @@
                             <!-- Recent achievements -->
                         </div>
                     </div>
+                    
+                    <div class="stat-block mt-20">
+                        <h3 class="mb-20">Loot Inventory 🎒</h3>
+                        <div id="lootInventory">
+                            <!-- Loot items -->
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -731,11 +738,38 @@
         <div id="workoutView" class="view">
             <div class="workout-form">
                 <h2 class="mb-20">Log Your Training</h2>
+                
+                <!-- XP Multiplier Info Display -->
+                <div id="xpMultiplierInfo" style="background: var(--bg-light); padding: 15px; margin-bottom: 20px; border: 2px solid var(--border-ornate); display: none;">
+                    <p style="color: var(--accent-gold); font-weight: 600; margin-bottom: 5px;">Current XP Multiplier: <span id="currentMultiplier">100%</span></p>
+                    <p style="color: var(--text-dim); font-size: 0.9em;" id="multiplierMessage"></p>
+                </div>
+                
+                <!-- XP Warning (Variety Penalty) -->
+                <div id="xpWarning" class="hidden" style="background: var(--accent-red); color: var(--text-light); padding: 15px; margin-bottom: 20px; border: 2px solid var(--border-ornate);">
+                    <h4 style="color: var(--text-light); margin-bottom: 10px;">⚠️ Variety Bonus Depleted!</h4>
+                    <p id="xpWarningText" style="margin-bottom: 10px;"></p>
+                    <div id="burnLootOption" class="hidden">
+                        <p style="margin-bottom: 10px;">You have <span id="lootCount" style="font-weight: 600; color: var(--accent-gold);">0</span> loot items. Burn one to reset XP multiplier?</p>
+                        <button type="button" onclick="burnLootItem()" style="background: var(--accent-gold); margin-right: 10px;">🔥 Burn Loot Item (Reset to 100%)</button>
+                        <button type="button" onclick="dismissWarning()" class="btn-secondary">Continue With Penalty</button>
+                    </div>
+                    <div id="noLootOption" class="hidden">
+                        <p style="color: var(--text-light);">No loot items available. Complete quests or get lucky drops to earn loot!</p>
+                        <button type="button" onclick="dismissWarning()" class="btn-secondary">Continue With Penalty</button>
+                    </div>
+                </div>
+                
                 <form id="workoutForm">
                     <div class="form-row">
                         <div class="form-group">
+                            <label for="workoutDate">Workout Date</label>
+                            <input type="date" id="workoutDate" required>
+                        </div>
+                        
+                        <div class="form-group">
                             <label for="exerciseType">Exercise Type</label>
-                            <select id="exerciseType" required>
+                            <select id="exerciseType" required onchange="checkVarietyPenalty()">
                                 <option value="">Select exercise</option>
                                 <option value="cardio">Cardio</option>
                                 <option value="strength">Strength Training</option>
@@ -860,7 +894,7 @@
         // IndexedDB Management
 
         const DB_NAME = 'QuestForFitnessDB';
-        const DB_VERSION = 1;
+        const DB_VERSION = 2;
         let db;
 
         // Initialize IndexedDB
@@ -896,6 +930,11 @@
                     // Achievements Store
                     if (!db.objectStoreNames.contains('achievements')) {
                         db.createObjectStore('achievements', { keyPath: 'id' });
+                    }
+
+                    // Loot Inventory Store
+                    if (!db.objectStoreNames.contains('loot')) {
+                        db.createObjectStore('loot', { keyPath: 'id', autoIncrement: true });
                     }
                 };
             });
@@ -995,36 +1034,119 @@
         }
 
         // Character Creation
-        document.getElementById('characterForm').addEventListener('submit', async (e) => {
-            e.preventDefault();
+        function setupEventListeners() {
+            const characterForm = document.getElementById('characterForm');
+            const workoutForm = document.getElementById('workoutForm');
+            
+            if (characterForm) {
+                characterForm.addEventListener('submit', async (e) => {
+                    e.preventDefault();
 
-            const character = {
-                id: 'main',
-                name: document.getElementById('charName').value,
-                race: document.getElementById('charRace').value,
-                class: document.getElementById('charClass').value,
-                sex: document.getElementById('charSex').value,
-                age: parseInt(document.getElementById('charAge').value),
-                level: 1,
-                xp: 0,
-                stats: generateStats(document.getElementById('charClass').value),
-                createdAt: new Date().toISOString()
-            };
+                    const character = {
+                        id: 'main',
+                        name: document.getElementById('charName').value,
+                        race: document.getElementById('charRace').value,
+                        class: document.getElementById('charClass').value,
+                        sex: document.getElementById('charSex').value,
+                        age: parseInt(document.getElementById('charAge').value),
+                        level: 1,
+                        xp: 0,
+                        stats: generateStats(document.getElementById('charClass').value),
+                        createdAt: new Date().toISOString()
+                    };
+                    
+                    await saveToStore('character', character);
+                    await initializeAchievements();
+                    await generateInitialQuests();
+                    
+                    // Hide character creation and show character view
+                    document.getElementById('characterCreation').style.display = 'none';
+                    document.getElementById('characterCreation').classList.remove('active');
+                    
+                    showView('character');
+                    await loadCharacter();
+                    showNotification('Character Created!', 'Your epic journey begins now!');
+                });
+            }
 
-            console.log('Creating character:', character);
-            
-            await saveToStore('character', character);
-            await initializeAchievements();
-            await generateInitialQuests();
-            
-            // Hide character creation and show character view
-            document.getElementById('characterCreation').style.display = 'none';
-            document.getElementById('characterCreation').classList.remove('active');
-            
-            showView('character');
-            await loadCharacter();
-            showNotification('Character Created!', 'Your epic journey begins now!');
-        });
+            // Workout Logging
+            if (workoutForm) {
+                workoutForm.addEventListener('submit', async (e) => {
+                    e.preventDefault();
+
+                const workoutDate = document.getElementById('workoutDate').value;
+                
+                const workout = {
+                    id: Date.now(),
+                    date: new Date(workoutDate + 'T12:00:00').toISOString(), // Set to noon to avoid timezone issues
+                    exerciseType: document.getElementById('exerciseType').value,
+                    exerciseName: document.getElementById('exerciseName').value,
+                    duration: parseInt(document.getElementById('duration').value),
+                    intensity: document.getElementById('intensity').value,
+                    sets: parseInt(document.getElementById('sets').value) || 0,
+                    reps: parseInt(document.getElementById('reps').value) || 0,
+                    distance: parseFloat(document.getElementById('distance').value) || 0,
+                    notes: document.getElementById('notes').value
+                };
+
+                // Calculate base XP
+                const baseXP = workout.duration * 5;
+                const intensityMultiplier = {
+                    light: 1,
+                    moderate: 1.5,
+                    hard: 2,
+                    extreme: 2.5
+                }[workout.intensity];
+                
+                // Get variety multiplier
+                const varietyMultiplier = await calculateVarietyMultiplier(workout.exerciseType, workout.date);
+                
+                // Calculate final XP
+                const xpGained = Math.floor(baseXP * intensityMultiplier * varietyMultiplier);
+                workout.xpGained = xpGained;
+                workout.varietyMultiplier = varietyMultiplier;
+
+                // Save workout
+                await saveToStore('workouts', workout);
+
+                // Update character XP and stats
+                await updateCharacterProgress(workout, xpGained);
+
+                // Update quests
+                await updateQuests(workout);
+
+                // Check for loot drops
+                await checkLootDrops(workout);
+
+                // Check achievements
+                await checkAchievements();
+
+                // Show success
+                showNotification('Training Complete!', `You gained ${xpGained} XP! (${Math.round(varietyMultiplier * 100)}% variety bonus)`);
+
+                // Reset form
+                document.getElementById('workoutForm').reset();
+                // Set date back to today
+                document.getElementById('workoutDate').valueAsDate = new Date();
+                
+                // Hide warnings
+                document.getElementById('xpWarning').classList.add('hidden');
+                document.getElementById('xpMultiplierInfo').style.display = 'none';
+                
+                // Reload character
+                await loadCharacter();
+                await loadHistory();
+            });
+            }
+
+            // Navigation tabs
+            document.querySelectorAll('.nav-tab').forEach(tab => {
+                tab.addEventListener('click', () => {
+                    const view = tab.getAttribute('data-view');
+                    showView(view);
+                });
+            });
+        }
 
         function generateStats(className) {
             const baseStats = {
@@ -1264,24 +1386,17 @@
             for (let quest of [...dailyQuests, weeklyQuest, epicQuest]) {
                 await saveToStore('quests', quest);
             }
-            
-            console.log('Initial quests generated with storylines');
         }
 
         // Load and Display Character
         async function loadCharacter() {
-            console.log('Loading character...');
             const character = await getFromStore('character', 'main');
-            console.log('Character data:', character);
             
             if (!character) {
-                console.log('No character found, showing creation screen');
                 document.getElementById('characterCreation').classList.add('active');
                 document.getElementById('characterView').classList.remove('active');
                 return;
             }
-
-            console.log('Character found, displaying stats');
             
             // Update display
             document.getElementById('displayName').textContent = character.name;
@@ -1310,7 +1425,8 @@
             // Load recent achievements
             await loadRecentAchievements();
             
-            console.log('Character loaded successfully');
+            // Load loot inventory
+            await loadLootInventory();
         }
 
         function renderStats(stats) {
@@ -1400,10 +1516,23 @@
                 return;
             }
 
-            const title = prompt('Quest title:');
+            const title = prompt('Quest title (use exact exercise name for auto-tracking):\n\nExamples:\n- "Running" (matches workout "Running")\n- "Push-ups" (matches workout "Push-ups")\n- "Morning Yoga" (generic daily quest)');
+            if (!title) return;
+            
             const description = prompt('Quest description:');
+            if (!description) return;
+            
             const goal = parseInt(prompt('Goal amount:'));
-            const unit = prompt('Unit (minutes/sessions/days/reps):');
+            if (!goal || goal <= 0) {
+                alert('Invalid goal amount!');
+                return;
+            }
+            
+            const unit = prompt('Unit:\n- minutes (for duration)\n- sessions (for count)\n- days (for streaks)\n- reps (for repetitions)\n- sets (for sets)');
+            if (!unit || !['minutes', 'sessions', 'days', 'reps', 'sets'].includes(unit.toLowerCase())) {
+                alert('Invalid unit! Use: minutes, sessions, days, reps, or sets');
+                return;
+            }
             
             let xpReward;
             if (questType === 'daily') xpReward = goal * 2.5;
@@ -1417,7 +1546,7 @@
                 description,
                 goal,
                 progress: 0,
-                unit,
+                unit: unit.toLowerCase(),
                 xpReward: Math.floor(xpReward),
                 difficulty: goal < 20 ? 'easy' : goal < 50 ? 'medium' : 'hard',
                 statBonus: null
@@ -1425,63 +1554,179 @@
 
             await saveToStore('quests', quest);
             loadQuests();
-            showNotification('Quest Added!', `New ${questType} quest created!`);
+            showNotification('Quest Added!', `${title} - Track by logging workouts with matching name!`);
         }
 
-        // Workout Logging
-        document.getElementById('workoutForm').addEventListener('submit', async (e) => {
-            e.preventDefault();
+        async function calculateVarietyMultiplier(exerciseType, workoutDate) {
+            // Flexibility and yoga are exempt from penalty
+            if (exerciseType === 'flexibility' || exerciseType === 'sports' || exerciseType === 'martial-arts' || exerciseType === 'other') {
+                return 1.0;
+            }
+            
+            // Only cardio and strength get variety penalty
+            if (exerciseType !== 'cardio' && exerciseType !== 'strength') {
+                return 1.0;
+            }
+            
+            const workouts = await getAllFromStore('workouts');
+            
+            // Sort workouts by date (most recent first)
+            workouts.sort((a, b) => new Date(b.date) - new Date(a.date));
+            
+            // Get workouts before this date
+            const priorWorkouts = workouts.filter(w => new Date(w.date) < new Date(workoutDate));
+            
+            if (priorWorkouts.length === 0) {
+                return 1.0; // First workout
+            }
+            
+            // Check for 2-day break
+            const lastWorkoutDate = new Date(priorWorkouts[0].date);
+            const currentDate = new Date(workoutDate);
+            const daysDiff = Math.floor((currentDate - lastWorkoutDate) / (1000 * 60 * 60 * 24));
+            
+            if (daysDiff >= 2) {
+                return 1.0; // Reset after 2-day break
+            }
+            
+            // Count consecutive workouts of same type
+            let consecutiveCount = 0;
+            for (let i = 0; i < priorWorkouts.length; i++) {
+                if (priorWorkouts[i].exerciseType === exerciseType) {
+                    consecutiveCount++;
+                } else {
+                    break; // Different type, stop counting
+                }
+                
+                // Check if there's a 2-day gap in the streak
+                if (i < priorWorkouts.length - 1) {
+                    const date1 = new Date(priorWorkouts[i].date);
+                    const date2 = new Date(priorWorkouts[i + 1].date);
+                    const gap = Math.floor((date1 - date2) / (1000 * 60 * 60 * 24));
+                    if (gap >= 2) {
+                        break; // Break in streak
+                    }
+                }
+            }
+            
+            // Apply penalty after 3 consecutive workouts
+            if (consecutiveCount < 3) {
+                return 1.0; // No penalty yet
+            }
+            
+            // Calculate penalty: 10% reduction per workout after 3rd
+            // 3rd = 100%, 4th = 90%, 5th = 81%, 6th = 73%, etc.
+            // Minimum 25%
+            const penaltyWorkouts = consecutiveCount - 2; // Start counting from 3rd
+            const multiplier = Math.pow(0.9, penaltyWorkouts);
+            const finalMultiplier = Math.max(multiplier, 0.25);
+            
+            return finalMultiplier;
+        }
 
-            const workout = {
-                id: Date.now(),
+        async function checkVarietyPenalty() {
+            const exerciseType = document.getElementById('exerciseType').value;
+            const workoutDate = document.getElementById('workoutDate').value;
+            
+            if (!exerciseType || !workoutDate) {
+                document.getElementById('xpMultiplierInfo').style.display = 'none';
+                return;
+            }
+            
+            const multiplier = await calculateVarietyMultiplier(exerciseType, workoutDate);
+            const percentage = Math.round(multiplier * 100);
+            
+            document.getElementById('currentMultiplier').textContent = percentage + '%';
+            document.getElementById('xpMultiplierInfo').style.display = 'block';
+            
+            if (percentage < 100) {
+                const lootItems = await getAllFromStore('loot');
+                document.getElementById('multiplierMessage').innerHTML = `⚠️ ${exerciseType} variety penalty active. ${lootItems.length > 0 ? 'You can burn a loot item to reset!' : 'Complete quests to earn loot items for resets.'}`;
+                
+                // Show warning
+                document.getElementById('xpWarningText').textContent = `Your ${exerciseType} XP is reduced to ${percentage}% due to lack of variety. Try a different exercise type to reset!`;
+                document.getElementById('xpWarning').classList.remove('hidden');
+                document.getElementById('lootCount').textContent = lootItems.length;
+                
+                if (lootItems.length > 0) {
+                    document.getElementById('burnLootOption').classList.remove('hidden');
+                    document.getElementById('noLootOption').classList.add('hidden');
+                } else {
+                    document.getElementById('burnLootOption').classList.add('hidden');
+                    document.getElementById('noLootOption').classList.remove('hidden');
+                }
+            } else {
+                document.getElementById('multiplierMessage').textContent = `✓ Full XP active! Keep varying your exercises.`;
+                document.getElementById('xpWarning').classList.add('hidden');
+            }
+        }
+
+        async function burnLootItem() {
+            const lootItems = await getAllFromStore('loot');
+            if (lootItems.length === 0) {
+                alert('No loot items to burn!');
+                return;
+            }
+            
+            // Use the oldest loot item
+            const lootToUse = lootItems[0];
+            
+            // Delete the loot item
+            const transaction = db.transaction(['loot'], 'readwrite');
+            await transaction.objectStore('loot').delete(lootToUse.id);
+            
+            // Record workout with penalty cleared by inserting a "variety workout"
+            // This effectively resets the streak
+            const dummyWorkout = {
+                id: Date.now() - 1, // Slightly earlier timestamp
                 date: new Date().toISOString(),
-                exerciseType: document.getElementById('exerciseType').value,
-                exerciseName: document.getElementById('exerciseName').value,
-                duration: parseInt(document.getElementById('duration').value),
-                intensity: document.getElementById('intensity').value,
-                sets: parseInt(document.getElementById('sets').value) || 0,
-                reps: parseInt(document.getElementById('reps').value) || 0,
-                distance: parseFloat(document.getElementById('distance').value) || 0,
-                notes: document.getElementById('notes').value
+                exerciseType: 'flexibility', // Type that doesn't get penalty
+                exerciseName: '[Loot Reset]',
+                duration: 0,
+                intensity: 'light',
+                xpGained: 0,
+                varietyMultiplier: 1.0,
+                isLootReset: true
             };
-
-            // Calculate XP
-            const baseXP = workout.duration * 5;
-            const intensityMultiplier = {
-                light: 1,
-                moderate: 1.5,
-                hard: 2,
-                extreme: 2.5
-            }[workout.intensity];
             
-            const xpGained = Math.floor(baseXP * intensityMultiplier);
-            workout.xpGained = xpGained;
-
-            // Save workout
-            await saveToStore('workouts', workout);
-
-            // Update character XP and stats
-            await updateCharacterProgress(workout, xpGained);
-
-            // Update quests
-            await updateQuests(workout);
-
-            // Check for loot drops
-            await checkLootDrops(workout);
-
-            // Check achievements
-            await checkAchievements();
-
-            // Show success
-            showNotification('Training Complete!', `You gained ${xpGained} XP!`);
-
-            // Reset form
-            document.getElementById('workoutForm').reset();
+            await saveToStore('workouts', dummyWorkout);
             
-            // Reload character
-            await loadCharacter();
-            await loadHistory();
-        });
+            showNotification('Loot Burned!', `Used ${lootToUse.icon} ${lootToUse.name} to reset variety penalty!`, 'gold');
+            
+            // Recheck penalty
+            await checkVarietyPenalty();
+            await loadLootInventory();
+        }
+
+        function dismissWarning() {
+            document.getElementById('xpWarning').classList.add('hidden');
+        }
+
+        async function loadLootInventory() {
+            const lootItems = await getAllFromStore('loot');
+            const container = document.getElementById('lootInventory');
+            
+            if (!container) return; // Not on character view
+            
+            if (lootItems.length === 0) {
+                container.innerHTML = '<p style="color: var(--text-dim);">No loot items. Complete quests and get lucky drops!</p>';
+                return;
+            }
+            
+            container.innerHTML = lootItems.map(loot => `
+                <div style="display: flex; align-items: center; justify-content: space-between; padding: 10px; background: var(--bg-dark); margin-bottom: 5px; border-left: 3px solid var(--accent-gold);">
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                        <span style="font-size: 1.5em;">${loot.icon}</span>
+                        <div>
+                            <div style="color: var(--accent-gold); font-weight: 600; font-size: 0.9em;">${loot.name}</div>
+                            <div style="font-size: 0.75em; color: var(--text-dim);">${loot.bonus}</div>
+                        </div>
+                    </div>
+                </div>
+            `).join('');
+            
+            container.innerHTML += `<p style="margin-top: 10px; font-size: 0.85em; color: var(--text-dim); font-style: italic;">Burn loot items to reset exercise variety penalties!</p>`;
+        }
 
         async function updateCharacterProgress(workout, xpGained) {
             const character = await getFromStore('character', 'main');
@@ -1518,27 +1763,58 @@
             for (let quest of quests) {
                 let progressAdded = 0;
 
-                // Daily quests - any exercise
-                if (quest.type === 'daily' && quest.unit === 'minutes') {
+                // PRIORITY 1: Exercise name exact match (case-insensitive)
+                // If quest title matches exercise name, it's a custom quest for that specific exercise
+                if (quest.title.toLowerCase() === workout.exerciseName.toLowerCase()) {
+                    if (quest.unit === 'minutes') {
+                        progressAdded = workout.duration;
+                    } else if (quest.unit === 'sessions') {
+                        progressAdded = 1;
+                    } else if (quest.unit === 'reps' && workout.reps > 0) {
+                        progressAdded = workout.reps;
+                    } else if (quest.unit === 'sets' && workout.sets > 0) {
+                        progressAdded = workout.sets;
+                    }
+                }
+                // PRIORITY 2: Partial name match (quest title contains exercise name or vice versa)
+                else if (quest.title.toLowerCase().includes(workout.exerciseName.toLowerCase()) || 
+                         workout.exerciseName.toLowerCase().includes(quest.title.toLowerCase())) {
+                    if (quest.unit === 'minutes') {
+                        progressAdded = workout.duration;
+                    } else if (quest.unit === 'sessions') {
+                        progressAdded = 1;
+                    } else if (quest.unit === 'reps' && workout.reps > 0) {
+                        progressAdded = workout.reps;
+                    } else if (quest.unit === 'sets' && workout.sets > 0) {
+                        progressAdded = workout.sets;
+                    }
+                }
+                // PRIORITY 3: Generic daily quests - any exercise
+                else if (quest.type === 'daily' && quest.unit === 'minutes' && !quest.title.toLowerCase().includes('strength') && !quest.title.toLowerCase().includes('cardio')) {
                     progressAdded = workout.duration;
                 }
-
-                // Strength training specific
-                if (quest.title.toLowerCase().includes('strength') && workout.exerciseType === 'strength') {
-                    progressAdded = workout.duration;
+                // PRIORITY 4: Strength training specific
+                else if (quest.title.toLowerCase().includes('strength') && workout.exerciseType === 'strength') {
+                    if (quest.unit === 'minutes') {
+                        progressAdded = workout.duration;
+                    } else if (quest.unit === 'sessions') {
+                        progressAdded = 1;
+                    }
                 }
-
-                // Cardio specific
-                if (quest.title.toLowerCase().includes('cardio') && workout.exerciseType === 'cardio') {
-                    progressAdded = 1; // One session
+                // PRIORITY 5: Cardio specific
+                else if (quest.title.toLowerCase().includes('cardio') && workout.exerciseType === 'cardio') {
+                    if (quest.unit === 'minutes') {
+                        progressAdded = workout.duration;
+                    } else if (quest.unit === 'sessions') {
+                        progressAdded = 1;
+                    }
                 }
-
-                // Weekly/Epic - consecutive days
-                if ((quest.type === 'weekly' || quest.type === 'epic') && quest.unit === 'days') {
+                // PRIORITY 6: Weekly/Epic - consecutive days
+                else if ((quest.type === 'weekly' || quest.type === 'epic') && quest.unit === 'days') {
                     const today = new Date().toDateString();
                     const workouts = await getAllFromStore('workouts');
                     const todayWorkouts = workouts.filter(w => 
-                        new Date(w.date).toDateString() === today
+                        new Date(w.date).toDateString() === today && !w.isLootReset
                     );
                     if (todayWorkouts.length === 1) { // First workout today
                         progressAdded = 1;
@@ -1612,12 +1888,19 @@
         }
 
         function showLootDrop(loot) {
+            // Save loot to inventory
+            saveToStore('loot', {
+                ...loot,
+                acquiredDate: new Date().toISOString()
+            });
+            
             const lootDiv = document.createElement('div');
             lootDiv.className = 'loot-notification';
             lootDiv.innerHTML = `
                 <h3>⭐ LEGENDARY LOOT DROP! ⭐</h3>
                 <div class="loot-item">${loot.icon} ${loot.name}</div>
                 <p style="color: var(--text-dim); margin-top: 10px;">${loot.bonus}</p>
+                <p style="color: var(--accent-gold); margin-top: 10px; font-size: 0.9em;">Added to your inventory!</p>
             `;
             document.body.appendChild(lootDiv);
 
@@ -1625,6 +1908,9 @@
                 lootDiv.style.animation = 'fadeIn 0.5s ease reverse';
                 setTimeout(() => lootDiv.remove(), 500);
             }, 3000);
+            
+            // Reload loot inventory if on character screen
+            loadLootInventory();
         }
 
         // Achievements System
@@ -1955,14 +2241,14 @@
             if (viewName === 'quests') loadQuests();
             if (viewName === 'achievements') loadAchievements();
             if (viewName === 'history') loadHistory();
+            if (viewName === 'workout') {
+                // Reset date to today when opening workout form
+                const today = new Date().toISOString().split('T')[0];
+                document.getElementById('workoutDate').value = today;
+                document.getElementById('xpWarning').classList.add('hidden');
+                document.getElementById('xpMultiplierInfo').style.display = 'none';
+            }
         }
-
-        document.querySelectorAll('.nav-tab').forEach(tab => {
-            tab.addEventListener('click', () => {
-                const view = tab.getAttribute('data-view');
-                showView(view);
-            });
-        });
 
         // Data Management
         async function exportData() {
@@ -1971,6 +2257,7 @@
                 workouts: await getAllFromStore('workouts'),
                 quests: await getAllFromStore('quests'),
                 achievements: await getAllFromStore('achievements'),
+                loot: await getAllFromStore('loot'),
                 exportDate: new Date().toISOString()
             };
 
@@ -2008,6 +2295,11 @@
                             await saveToStore('achievements', achievement);
                         }
                     }
+                    if (data.loot) {
+                        for (let loot of data.loot) {
+                            await saveToStore('loot', loot);
+                        }
+                    }
 
                     showNotification('Data Imported!', 'Your progress has been restored!');
                     loadCharacter();
@@ -2031,7 +2323,7 @@
             if (!confirm('This will delete ALL data including workouts, quests, and achievements. Are you ABSOLUTELY sure?')) return;
             if (!confirm('Last chance! This action cannot be undone!')) return;
 
-            const stores = ['character', 'workouts', 'quests', 'achievements'];
+            const stores = ['character', 'workouts', 'quests', 'achievements', 'loot'];
             for (let store of stores) {
                 const transaction = db.transaction([store], 'readwrite');
                 await transaction.objectStore(store).clear();
@@ -2070,23 +2362,29 @@
 
         // Initialize App
         async function initApp() {
-            console.log('Initializing app...');
             try {
                 await initDB();
-                console.log('Database initialized');
+                
+                // Setup event listeners AFTER DOM is ready
+                setupEventListeners();
+                
+                // Set workout date to today
+                const today = new Date().toISOString().split('T')[0];
+                const dateInput = document.getElementById('workoutDate');
+                if (dateInput) {
+                    dateInput.value = today;
+                    dateInput.max = today; // Can't log future workouts
+                }
                 
                 const character = await getFromStore('character', 'main');
-                console.log('Checking for existing character:', character);
                 
                 if (character) {
-                    console.log('Character exists, loading character view');
                     // Character exists, load the character view
                     document.getElementById('characterCreation').classList.remove('active');
                     document.getElementById('characterView').classList.add('active');
                     await loadCharacter();
                     showView('character');
                 } else {
-                    console.log('No character, showing creation form');
                     // No character, show creation form
                     document.getElementById('characterCreation').classList.add('active');
                     document.getElementById('characterView').classList.remove('active');
